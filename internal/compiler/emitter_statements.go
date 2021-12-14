@@ -299,6 +299,12 @@ func (em *emitter) emitNodes(nodes []ast.Node) {
 					em.fb.enterStack()
 					em.emitCallNode(expr.(*ast.Call), false, false, ast.Format(ctx))
 					em.fb.exitStack()
+				} else if render, ok := expr.(*ast.Render); ok {
+					// Optimize {{ render "path" }}
+					em.fb.enterStack()
+					em.emitNodes([]ast.Node{render.IR.Import})
+					em.emitCallNode(render.IR.Call, false, false, ast.Format(ctx))
+					em.fb.exitStack()
 				} else {
 					ti := em.ti(expr)
 					em.fb.enterStack()
@@ -482,7 +488,7 @@ func (em *emitter) emitAssignmentNode(node *ast.Assignment) {
 			}
 			// Package/closure/imported variable.
 			if index, ok := em.varStore.nonLocalVarIndex(v); ok {
-				addresses[i] = em.addressNonLocalVar(int16(index), varType, pos, node.Type)
+				addresses[i] = em.addressNonLocalVar(index, varType, pos, node.Type)
 				break
 			}
 			panic(internalError("unexpected"))
@@ -495,14 +501,23 @@ func (em *emitter) emitAssignmentNode(node *ast.Assignment) {
 				indexType = exprType.Key()
 			}
 			index := em.emitExpr(v.Index, indexType)
-			if exprType.Kind() == reflect.Map {
-				addresses[i] = em.addressMapIndex(expr, index, exprType, pos, node.Type)
-			} else {
-				addresses[i] = em.addressSliceIndex(expr, index, exprType, pos, node.Type)
+			switch exprType.Kind() {
+			case reflect.Map:
+				if nonLocalMap, ok := em.varStore.nonLocalVarIndex(v.Expr); ok {
+					addresses[i] = em.addressNonLocalMapIndex(nonLocalMap, expr, index, exprType, pos, node.Type)
+				} else {
+					addresses[i] = em.addressLocalMapIndex(expr, index, exprType, pos, node.Type)
+				}
+			case reflect.Slice, reflect.Array:
+				if nonLocalSlice, ok := em.varStore.nonLocalVarIndex(v.Expr); ok {
+					addresses[i] = em.addressGlobalSliceIndex(nonLocalSlice, expr, index, exprType, pos, node.Type)
+				} else {
+					addresses[i] = em.addressSliceIndex(expr, index, exprType, pos, node.Type)
+				}
 			}
 		case *ast.Selector:
 			if index, ok := em.varStore.nonLocalVarIndex(v); ok {
-				addresses[i] = em.addressNonLocalVar(int16(index), em.typ(v), pos, node.Type)
+				addresses[i] = em.addressNonLocalVar(index, em.typ(v), pos, node.Type)
 				break
 			}
 			expr := v.Expr
@@ -518,8 +533,11 @@ func (em *emitter) emitAssignmentNode(node *ast.Assignment) {
 				field, _ = typ.FieldByName(v.Ident)
 			}
 			index := em.fb.makeFieldIndex(field.Index)
-			addresses[i] = em.addressStructSelector(reg, index, typ, pos, node.Type)
-			break
+			if nonLocalStruct, ok := em.varStore.nonLocalVarIndex(expr); ok {
+				addresses[i] = em.addressNonLocalStructSelector(nonLocalStruct, reg, index, typ, pos, node.Type)
+			} else {
+				addresses[i] = em.addressLocalStructSelector(reg, index, typ, pos, node.Type)
+			}
 		case *ast.UnaryOperator:
 			if v.Operator() != ast.OperatorPointer {
 				panic(internalError("unexpected operator %s", v.Operator()))

@@ -408,20 +408,20 @@ func (fb *functionBuilder) emitIf(ky bool, x int8, o runtime.Condition, y int8, 
 	fb.fn.Body = append(fb.fn.Body, runtime.Instruction{Op: op, A: x, B: int8(o), C: y})
 }
 
-// emitIndex appends a new "Index", "IndexRef" or "MapIndex" instruction to the
-// function body. If ref is set then the result of the indexing operation is a
-// reference to the index (i.e. is an addressable reflect.Value with the same
-// underlying index value); otherwise the index is copied.
+// emitIndex appends a new "Index", "IndexRef", "MapIndex", or "IndexString"
+// instruction to the function body. If ref is set then the result of the
+// indexing operation is a reference to the index (i.e. is an addressable
+// reflect.Value with the same underlying index value); otherwise the index is
+// copied.
 //
 //  dst = expr[i]
 //
 // TODO: consider splitting emitIndex in two methods removing the 'ref bool'
 // argument.
-func (fb *functionBuilder) emitIndex(ki bool, expr, i, dst int8, exprType reflect.Type, pos *ast.Position, ref bool) {
+func (fb *functionBuilder) emitIndex(ki bool, expr, i, dst int8, t reflect.Type, pos *ast.Position, ref bool) {
 	fb.addPosAndPath(pos)
-	fb.addOperandKinds(0, 0, exprType.Kind())
 	fn := fb.fn
-	kind := exprType.Kind()
+	kind := t.Kind()
 	// TODO: re-enable this check?
 	// if ref && (kind != reflect.Array && kind != reflect.Slice) {
 	// 	panic(fmt.Errorf("BUG: cannot set the ref argument if the expression has kind %s", kind))
@@ -434,12 +434,14 @@ func (fb *functionBuilder) emitIndex(ki bool, expr, i, dst int8, exprType reflec
 		} else {
 			op = runtime.OpIndex
 		}
+		fb.addOperandKinds(0, 0, t.Elem().Kind())
 	case reflect.Map:
 		op = runtime.OpMapIndex
+		fb.addOperandKinds(0, t.Key().Kind(), t.Elem().Kind())
 	case reflect.String:
 		op = runtime.OpIndexString
 	default:
-		panic(internalError("invalid type %s", exprType))
+		panic(internalError("invalid type %s", t))
 	}
 	if ki {
 		op = -op
